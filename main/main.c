@@ -8,11 +8,44 @@
 #include <freertos/task.h>
 #include <driver/gpio.h>
 
-#include <driver/gpio.h>
-
 #include <homekit/homekit.h>
 #include <homekit/characteristics.h>
+
+#include <dht/dht.h>
+
 #include "wifi.h"
+
+// Make sure SENSOR_PIN is configured
+#ifndef SENSOR_PIN
+#error SENSOR_PIN is not specified
+#endif
+
+// Make sure HEATER_PIN is configured
+#ifndef HEATER_PIN
+#error HEATER_PIN is not specified
+#endif
+
+#define MAX_UPDATE_INTERVAL 60
+
+
+/* This program controls an heater through an output pin.
+ *
+ * The board has an DHT22 temperature sensor on it that we poll for temperature
+ * readings every three seconds. If the temperature is below the target
+ * temperature and we have not changed the heater state in the last minute the
+ * heater will be turned on, and similarily if the temperature is above the
+ * target temperature and we have not changed the heater state in the last
+ * minute the heater will be turned off.
+ *
+ *
+ *
+ *
+ *
+ */
+
+/*
+ * Wifi handling
+ */
 
 
 void on_wifi_ready();
@@ -57,6 +90,22 @@ static void wifi_init() {
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 }
+
+/**
+ * Homekit state callbacks
+ */
+
+
+bool heater_update();
+
+
+void on_update(homekit_characteristic_t *ch, homekit_value_t value, void *context) {
+    heater_update();
+}
+
+/**
+ * LED stuff
+ */
 
 const int led_gpio = 2;
 bool led_on = false;
@@ -106,25 +155,131 @@ void led_on_set(homekit_value_t value) {
     led_write(led_on);
 }
 
+/**
+ * Temperature stuff
+ */
+
+// Homekit characteristics
+homekit_characteristic_t temperature = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE, 0);
+homekit_characteristic_t humidity    = HOMEKIT_CHARACTERISTIC_(CURRENT_RELATIVE_HUMIDITY, 0);
+
+/*
+ * Task to update the temperature from the sensor
+ */
+void temperature_sensor_task(void *_args) {
+    gpio_pullup_dis(SENSOR_PIN);
+
+    float humidity_value, temperature_value;
+    while (1) {
+        bool success = dht_read_float_data(
+            DHT_TYPE_DHT22, SENSOR_PIN,
+            &humidity_value, &temperature_value
+        );
+        if (success) {
+            temperature.value.float_value = temperature_value;
+            humidity.value.float_value = humidity_value;
+
+            homekit_characteristic_notify(&temperature, HOMEKIT_FLOAT(temperature_value));
+            homekit_characteristic_notify(&humidity, HOMEKIT_FLOAT(humidity_value));
+
+            // Update the heater state
+            heater_update();
+        } else {
+            printf("Couldn't read data from sensor\n");
+        }
+
+        // The sensor can only be read every 2 seconds, so every 3 seconds
+        // seems like a good compromise.
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+    }
+}
+
+void temperature_sensor_init() {
+    xTaskCreate(temperature_sensor_task, "Temperature sensor", 256, NULL, 2, NULL);
+}
+
+/**
+ * Heater control
+ */
+
+// This is the temperature that we're aiming for
+homekit_characteristic_t target_temperature  = HOMEKIT_CHARACTERISTIC_(
+    TARGET_TEMPERATURE, 22, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(on_update)
+);
+
+const int heater_pin = HEATER_PIN;
+bool heater_on = false;
+int64_t last_update = 0;
+
+void heater_write(bool on) {
+    gpio_set_level(heater_pin, on ? 1 : 0);
+}
+
+void heater_init() {
+    gpio_set_direction(heater_pin, GPIO_MODE_OUTPUT);
+    heater_write(heater_on);
+}
+
+bool heater_update() {
+    float current_temp = temperature.value.float_value;
+    float target_temp = target_temperature.value.float_value;
+    int64_t seconds_since_update = (esp_timer_get_time() - last_update) / 1000000;
+    bool state_updated = false;
+
+    // Make sure there's been at least MAX_UPDATE_INTERVAL seconds since we
+    // last update the heater state.
+    if (last_update != 0 && seconds_since_update < MAX_UPDATE_INTERVAL) {
+        return state_updated;
+    }
+
+    if (current_temp < target_temp && !heater_on) {
+        // If target temperature is below and heater is off, turn it on
+        heater_on = true;
+        state_updated = true;
+        heater_write(heater_on);
+    } else if (current_temp > target_temp && heater_on) {
+        // If target temperature is above and heater is on, turn it off
+        heater_on = false;
+        state_updated = true;
+        heater_write(heater_on);
+    }
+
+    return state_updated;
+}
+
+
+/**
+ * Configuration
+ */
 
 homekit_accessory_t *accessories[] = {
     HOMEKIT_ACCESSORY(.id=1, .category=homekit_accessory_category_lightbulb, .services=(homekit_service_t*[]){
         HOMEKIT_SERVICE(ACCESSORY_INFORMATION, .characteristics=(homekit_characteristic_t*[]){
-            HOMEKIT_CHARACTERISTIC(NAME, "Sample LED"),
-            HOMEKIT_CHARACTERISTIC(MANUFACTURER, "HaPK"),
-            HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "037A2BABF19D"),
-            HOMEKIT_CHARACTERISTIC(MODEL, "MyLED"),
+            HOMEKIT_CHARACTERISTIC(NAME, "Heater"),
+            HOMEKIT_CHARACTERISTIC(MANUFACTURER, "Drugis AS"),
+            HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "037A2BABF19E"),
+            HOMEKIT_CHARACTERISTIC(MODEL, "Alpha"),
             HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.1"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, led_identify),
             NULL
         }),
         HOMEKIT_SERVICE(LIGHTBULB, .primary=true, .characteristics=(homekit_characteristic_t*[]){
-            HOMEKIT_CHARACTERISTIC(NAME, "Sample LED"),
+            HOMEKIT_CHARACTERISTIC(NAME, "Status LED"),
             HOMEKIT_CHARACTERISTIC(
                 ON, false,
                 .getter=led_on_get,
                 .setter=led_on_set
             ),
+            NULL
+        }),
+        HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true, .characteristics=(homekit_characteristic_t*[]) {
+            HOMEKIT_CHARACTERISTIC(NAME, "Temperature sensor"),
+            &temperature,
+            NULL
+        }),
+        HOMEKIT_SERVICE(HUMIDITY_SENSOR, .characteristics=(homekit_characteristic_t*[]) {
+            HOMEKIT_CHARACTERISTIC(NAME, "Humidity sensor"),
+            &humidity,
             NULL
         }),
         NULL
@@ -134,7 +289,7 @@ homekit_accessory_t *accessories[] = {
 
 homekit_server_config_t config = {
     .accessories = accessories,
-    .password = "111-11-111"
+    .password = "600-20-341"
 };
 
 void on_wifi_ready() {
@@ -152,4 +307,6 @@ void app_main(void) {
 
     wifi_init();
     led_init();
+    temperature_sensor_init();
+    heater_init();
 }
