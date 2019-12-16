@@ -1,0 +1,5 @@
+.envrc
+.python-version
+build
+sdkconfig
+wifi.h
