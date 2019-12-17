@@ -167,8 +167,6 @@ homekit_characteristic_t humidity    = HOMEKIT_CHARACTERISTIC_(CURRENT_RELATIVE_
  * Task to update the temperature from the sensor
  */
 void temperature_sensor_task(void *_args) {
-    gpio_pullup_dis(SENSOR_PIN);
-
     float humidity_value, temperature_value;
     while (1) {
         bool success = dht_read_float_data(
@@ -195,7 +193,7 @@ void temperature_sensor_task(void *_args) {
 }
 
 void temperature_sensor_init() {
-    xTaskCreate(temperature_sensor_task, "Temperature sensor", 256, NULL, 2, NULL);
+    xTaskCreate(temperature_sensor_task, "Temperature sensor", 512, NULL, 2, NULL);
 }
 
 /**

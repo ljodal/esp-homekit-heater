@@ -65,6 +65,9 @@ static portMUX_TYPE mutex = portMUX_INITIALIZER_UNLOCKED;
 static bool dht_await_pin_state(uint8_t pin, uint32_t timeout,
         bool expected_pin_state, uint32_t *duration)
 {
+
+    gpio_set_direction(pin, GPIO_MODE_INPUT);
+
     for (uint32_t i = 0; i < timeout; i += DHT_TIMER_INTERVAL) {
         // need to wait at least a single interval to prevent reading a jitter
         ets_delay_us(DHT_TIMER_INTERVAL);
@@ -90,6 +93,7 @@ static inline bool dht_fetch_data(dht_sensor_type_t sensor_type, uint8_t pin, bo
     uint32_t high_duration;
 
     // Phase 'A' pulling signal low to initiate read sequence
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT_OD);
     gpio_set_level(pin, 0);
     ets_delay_us(sensor_type == DHT_TYPE_SI7021 ? 500 : 20000);
     gpio_set_level(pin, 1);
@@ -155,11 +159,17 @@ bool dht_read_data(dht_sensor_type_t sensor_type, uint8_t pin, int16_t *humidity
     uint8_t data[DHT_DATA_BITS/8] = {0};
     bool result;
 
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT_OD);
+    gpio_set_level(pin, 1);
 
     portENTER_CRITICAL(&mutex);
     result = dht_fetch_data(sensor_type, pin, bits);
     portEXIT_CRITICAL(&mutex);
+
+    /* restore GPIO direction because, after calling dht_fetch_data(), the
+     * GPIO direction mode changes */
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT_OD);
+    gpio_set_level(pin, 1);
 
     if (!result) {
         return false;
