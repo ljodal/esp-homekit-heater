@@ -239,9 +239,6 @@ void temperature_sensor_task(void *_args) {
             homekit_characteristic_notify(&current_temperature,
                                           current_temperature.value);
             homekit_characteristic_notify(&current_humidity, current_humidity.value);
-
-            // Update state, in case we should to turn the heater on or off
-            update_state();
         }
 
         // Update state, in case we should to turn the heater on or off. We
