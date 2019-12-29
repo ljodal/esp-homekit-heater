@@ -38,11 +38,6 @@
  * heater will be turned on, and similarily if the temperature is above the
  * target temperature and we have not changed the heater state in the last
  * minute the heater will be turned off.
- *
- *
- *
- *
- *
  */
 
 /***********************************************\
