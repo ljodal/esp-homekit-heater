@@ -30,9 +30,6 @@
 
 #define LED_PIN 13
 
-// This bit is set when we are connected to WiFI
-#define CONNECTED_BIT BIT0
-
 /* This program controls an heater through an output pin.
  *
  * The board has an DHT22 temperature sensor on it that we poll for temperature
