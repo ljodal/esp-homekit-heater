@@ -4,9 +4,9 @@ PROJECT_NAME := homekit-heater
 SENSOR_PIN ?= 21
 
 # Output pin for heater
-HEATER_PIN ?= 2
+HEATER_PIN ?= 4
 
-CFLAGS += -I$(abspath .) -DHOMEKIT_SHORT_APPLE_UUIDS -DSENSOR_PIN="$(SENSOR_PIN)" -DHEATER_PIN="$(HEATER_PIN)"
+CFLAGS += -I$(abspath .) -DSENSOR_PIN="$(SENSOR_PIN)" -DHEATER_PIN="$(HEATER_PIN)"
 
 EXTRA_COMPONENT_DIRS += $(abspath ./components)
 
