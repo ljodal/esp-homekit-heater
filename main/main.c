@@ -103,7 +103,7 @@ static void wifi_init() {
  *                                              *
 \***********************************************/
 
-// Identify the thermostat by blinking an LED
+// Identify the heater by blinking an LED
 void identify_task(void *_args) {
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
 
@@ -191,8 +191,9 @@ void temperature_sensor_task(void *_args) {
     }
 }
 
-void thermostat_init() {
-    xTaskCreate(temperature_sensor_task, "Thermostat task", 2048, NULL, 2, NULL);
+void temperature_sensor_init() {
+    xTaskCreate(temperature_sensor_task, "Temperature sensor task", 2048, NULL, 2,
+                NULL);
 }
 
 /***********************************************\
@@ -339,5 +340,5 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     wifi_init();
-    thermostat_init();
+    temperature_sensor_init();
 }
