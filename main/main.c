@@ -25,7 +25,8 @@
 #    error HEATER_PIN is not specified
 #endif
 
-#define MAX_UPDATE_INTERVAL 1
+#define MIN_UPDATE_PERIOD 10 * 1000 * 1000
+#define SENSOR_TIMEOUT_PERIOD (60 * 1000 * 1000)
 #define TEMPERATURE_POLL_PERIOD 10000
 
 #define LED_PIN 13
@@ -232,15 +233,33 @@ static inline bool is_heating() { return current_state.value.int_value == 2; }
 static inline bool is_idle() { return current_state.value.int_value == 1; }
 static inline bool is_inactive() { return current_state.value.int_value == 0; }
 
+// Keep track of the last time we turned the heater on/off, to make sure we
+// don't turn it on/off too often.
+static uint64_t last_update_time = 0;
+
 // Helpers to turn the heater on or off
-void heaterOn() { gpio_set_level(HEATER_PIN, 1); }
-void heaterOff() { gpio_set_level(HEATER_PIN, 0); }
+void heaterOn() {
+    gpio_set_level(HEATER_PIN, 1);
+    last_update_time = esp_timer_get_time();
+}
+void heaterOff() {
+    gpio_set_level(HEATER_PIN, 0);
+    last_update_time = esp_timer_get_time();
+}
 
 void update_state() {
+    uint64_t time_since_last_update = esp_timer_get_time() - last_update_time;
+
+    printf("Time since last update: %lld\n", time_since_last_update);
+
+    // Make sure we don't turn the heater on/off too often. If there's been
+    // then MIN_UPDATE_PERIOD µs since the last update, don't update now.
+    if (last_update_time != 0 && time_since_last_update < MIN_UPDATE_PERIOD) return;
+
     // In order to keep the heater active we require data to be read from the
     // temperature sensor at least once in the last 60 seconds.
     uint64_t sensor_timeout =
-        (esp_timer_get_time() - last_sensor_reading_time) > 60 * 1000 * 1000;
+        (esp_timer_get_time() - last_sensor_reading_time) > SENSOR_TIMEOUT_PERIOD;
 
     // If the active state is set to 0, or we have a sensor timeout, the heater
     // should be disabled.
