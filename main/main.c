@@ -1,5 +1,6 @@
 #include <esp_event_loop.h>
 #include <esp_log.h>
+#include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <nvs_flash.h>
 #include <stdio.h>
@@ -7,6 +8,7 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/event_groups.h>
 
 #include <homekit/characteristics.h>
 #include <homekit/homekit.h>
@@ -31,6 +33,11 @@
 
 #define LED_PIN 13
 
+// Bits for the event group, one for when we are connected to WiFI and another
+// for when the clock has been initialized.
+#define WIFI_CONNECTED_BIT (1 << 0)
+#define TIME_INITIALIZED_BIT (1 << 1)
+
 /* This program controls an heater through an output pin.
  *
  * The board has an DHT22 temperature sensor on it that we poll for temperature
@@ -43,11 +50,22 @@
 
 /***********************************************\
  *                                              *
- * Wifi handling                                *
+ * System events                                *
  *                                              *
 \***********************************************/
 
-void on_wifi_ready();
+static EventGroupHandle_t event_group;
+
+bool event_group_init() {
+    event_group = xEventGroupCreate();
+    return event_group != NULL;
+}
+
+/***********************************************\
+ *                                              *
+ * Wifi handling                                *
+ *                                              *
+\***********************************************/
 
 esp_err_t event_handler(void *ctx, system_event_t *event) {
     switch (event->event_id) {
@@ -57,11 +75,12 @@ esp_err_t event_handler(void *ctx, system_event_t *event) {
             break;
         case SYSTEM_EVENT_STA_GOT_IP:
             printf("WiFI ready\n");
-            on_wifi_ready();
+            xEventGroupSetBits(event_group, WIFI_CONNECTED_BIT);
             break;
         case SYSTEM_EVENT_STA_DISCONNECTED:
             printf("STA disconnected\n");
             esp_wifi_connect();
+            xEventGroupClearBits(event_group, WIFI_CONNECTED_BIT);
             break;
         default:
             break;
@@ -88,6 +107,51 @@ static void wifi_init() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+static esp_err_t wifi_wait_connected() {
+    // Wait for WiFi to connect
+    EventBits_t bits = xEventGroupWaitBits(event_group, WIFI_CONNECTED_BIT, false, true,
+                                           portMAX_DELAY);
+
+    if ((bits & WIFI_CONNECTED_BIT) == WIFI_CONNECTED_BIT) {
+        return ESP_OK;
+    }
+
+    return ESP_ERR_TIMEOUT;
+}
+
+/***********************************************\
+ *                                              *
+ * sNTP handling                                *
+ *                                              *
+\***********************************************/
+
+static void time_sync_notification_cb(struct timeval *tv) {
+    xEventGroupSetBits(event_group, TIME_INITIALIZED_BIT);
+}
+
+static void time_init(void) {
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+    sntp_init();
+
+    // Set timezone to CET
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+    tzset();
+}
+
+static esp_err_t time_wait_initialized() {
+    EventBits_t bits = xEventGroupWaitBits(event_group, TIME_INITIALIZED_BIT, false,
+                                           true, portMAX_DELAY);
+
+    if ((bits & TIME_INITIALIZED_BIT) == TIME_INITIALIZED_BIT) {
+        return ESP_OK;
+    }
+
+    return ESP_ERR_TIMEOUT;
 }
 
 /***********************************************\
@@ -180,6 +244,12 @@ void temperature_sensor_task(void *_args) {
             update_state();
         }
 
+        // Update state, in case we should to turn the heater on or off. We
+        // update state regardless of whether we managed to read from the
+        // sensor or not, as we might turn it off if we haven't read any data
+        // from the sensor in a long time (60 seconds).
+        update_state();
+
         vTaskDelay(TEMPERATURE_POLL_PERIOD / portTICK_PERIOD_MS);
     }
 }
@@ -249,8 +319,6 @@ void heaterOff() {
 
 void update_state() {
     uint64_t time_since_last_update = esp_timer_get_time() - last_update_time;
-
-    printf("Time since last update: %lld\n", time_since_last_update);
 
     // Make sure we don't turn the heater on/off too often. If there's been
     // then MIN_UPDATE_PERIOD µs since the last update, don't update now.
@@ -339,8 +407,6 @@ homekit_accessory_t *accessories[] = {
 
 homekit_server_config_t config = {.accessories = accessories, .password = "600-20-341"};
 
-void on_wifi_ready() { homekit_server_init(&config); }
-
 void app_main(void) {
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -350,6 +416,24 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    if (!event_group_init()) {
+        printf("Failed to create event group");
+        return;
+    }
+
     wifi_init();
+
+    // Make sure we can connect to WiFi before continuing
+    ESP_ERROR_CHECK(wifi_wait_connected());
+
+    // Initialize sNTP library to get RTC
+    time_init();
+
+    // Wait to get RTC before continuting
+    ESP_ERROR_CHECK(time_wait_initialized());
+
     temperature_sensor_init();
+
+    // Initialize the homekit server
+    homekit_server_init(&config);
 }
