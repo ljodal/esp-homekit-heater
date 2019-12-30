@@ -15,16 +15,21 @@
 
 #include <dht/dht.h>
 
-#include "wifi.h"
+#include "config.h"
 
-// Make sure SENSOR_PIN is configured
+#include "temperature_logger.h"
+
+// Make sure all the config variables we need are specified
 #ifndef SENSOR_PIN
-#    error SENSOR_PIN is not specified
+#    error SENSOR_PIN is not defined
 #endif
 
-// Make sure HEATER_PIN is configured
 #ifndef HEATER_PIN
-#    error HEATER_PIN is not specified
+#    error HEATER_PIN is not defined
+#endif
+
+#ifndef SERIAL_NUMBER
+#    error SERIAL_NUMBER is not defined, must be set in config.h
 #endif
 
 #define MIN_UPDATE_PERIOD 10 * 1000 * 1000
@@ -222,23 +227,26 @@ static uint64_t last_sensor_reading_time = 0;
 void temperature_sensor_task(void *_args) {
     gpio_set_direction(HEATER_PIN, GPIO_MODE_OUTPUT);
 
-    float humidity_value, temperature_value;
+    int16_t humidity_value, temperature_value;
     while (1) {
-        bool success = dht_read_float_data(DHT_TYPE_DHT22, SENSOR_PIN, &humidity_value,
-                                           &temperature_value);
+        bool success = dht_read_data(DHT_TYPE_DHT22, SENSOR_PIN, &humidity_value,
+                                     &temperature_value);
         if (success) {
             // Update the last sensor reading time
             last_sensor_reading_time = esp_timer_get_time();
 
             // Set characteristic values
-            current_temperature.value = HOMEKIT_FLOAT(temperature_value);
-            current_humidity.value    = HOMEKIT_FLOAT(humidity_value);
+            current_temperature.value = HOMEKIT_FLOAT((float)temperature_value / 10);
+            current_humidity.value    = HOMEKIT_FLOAT((float)humidity_value / 10);
 
             // Notify connected devices that the temperature and humidity has
             // been updated.
             homekit_characteristic_notify(&current_temperature,
                                           current_temperature.value);
             homekit_characteristic_notify(&current_humidity, current_humidity.value);
+
+            // Log the read temperature
+            logger_log_temperature(temperature_value, humidity_value);
         }
 
         // Update state, in case we should to turn the heater on or off. We
@@ -368,9 +376,9 @@ void update_state() {
 homekit_accessory_t *accessories[] = {
     HOMEKIT_ACCESSORY(.id=1, .category=homekit_accessory_category_heater, .services=(homekit_service_t*[]) {
         HOMEKIT_SERVICE(ACCESSORY_INFORMATION, .characteristics=(homekit_characteristic_t*[]) {
-            HOMEKIT_CHARACTERISTIC(NAME, "Panel heater controller"),
+            HOMEKIT_CHARACTERISTIC(NAME, "Heater - " SERIAL_NUMBER),
             HOMEKIT_CHARACTERISTIC(MANUFACTURER, "Drugis AS"),
-            HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "001"),
+            HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, SERIAL_NUMBER),
             HOMEKIT_CHARACTERISTIC(MODEL, "Alpha"),
             HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.1"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
@@ -422,6 +430,9 @@ void app_main(void) {
 
     // Make sure we can connect to WiFi before continuing
     ESP_ERROR_CHECK(wifi_wait_connected());
+
+    // Initialize the logger
+    ESP_ERROR_CHECK(logger_init());
 
     // Initialize sNTP library to get RTC
     time_init();

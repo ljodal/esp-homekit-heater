@@ -16,12 +16,18 @@ When everything is installed, make sure you've checked out all the submodules:
 git submodule update --init --recursive
 ```
 
-Then you need to create an `wifi.h` in the project root with the following
+Then you need to create an `config.h` in the project root with the following
 contents:
 
 ```c
+#define SERIAL_NUMBER "<device serial>"
+
 #define WIFI_SSID "<your wifi ssid>"
 #define WIFI_PASSWORD "<your wifi mypassword>"
+
+#define MQTT_CLIENT_ID "<mqtt_id>"
+#define MQTT_TOPIC "<mqtt_topic>"
+#define MQTT_URI "mqtt://<host>"
 ```
 
 After that you can run `make` to compile the project.
