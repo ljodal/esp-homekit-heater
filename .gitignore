@@ -2,4 +2,4 @@
 .python-version
 build
 sdkconfig
-wifi.h
+config.h
