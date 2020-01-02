@@ -26,7 +26,6 @@ contents:
 #define WIFI_PASSWORD "<your wifi mypassword>"
 
 #define MQTT_CLIENT_ID "<mqtt_id>"
-#define MQTT_TOPIC "<mqtt_topic>"
 #define MQTT_URI "mqtt://<host>"
 ```
 

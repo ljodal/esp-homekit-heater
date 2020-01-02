@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
-#include "temperature_logger.h"
 #include <mqtt_client.h>
+
+#include "temperature_logger.h"
 
 #include "config.h"
 
@@ -10,38 +11,26 @@
 #    error MQTT_CLIENT_ID is not defined, must be set in config.h
 #endif
 
-#ifndef MQTT_TOPIC
-#    error MQTT_TOPIC is not defined, must be set in config.h
-#endif
-
 #ifndef MQTT_URI
 #    error MQTT_URI is not defined, must be set in config.h
 #endif
 
-#define DATETIME_FORMAT "%FT%T%z"
-#define JSON_FORMAT                \
-    "{"                            \
-    "\"temperature\":%d.%d,"       \
-    "\"relative_humidity\":%d.%d," \
-    "\"timestamp\":\"%s\""         \
-    "}"
+#define MQTT_TOPIC_PREFIX "devices/" MQTT_CLIENT_ID
+
+#define DATETIME_FORMAT "%FT%TZ"
+#define SAMPLE_DATETIME "2020-01-01T00:00:00Z"
+#define TEMPERATURE_JSON_FORMAT "{\"timestamp\":\"%s\",\"temperature\":%d.%d}"
+#define HUMIDITY_JSON_FORMAT "{\"timestamp\":\"%s\", \"relative_humidity\":%d.%d}"
+
+#define BUFFER_LENGTH(format) sizeof(SAMPLE_DATETIME) + sizeof(format) + 10
 
 // MQTT client
 static esp_mqtt_client_handle_t client;
 
-// Write a single temperature reading as a JSON object to the given buffer.
-static int temperature_reading_to_json(time_t time, int16_t temperature,
-                                       int16_t relative_humidity, char* buffer,
-                                       size_t buffer_length) {
-    // Format the given time as an ISO 8601 timestamp
-    char      strftime_buf[sizeof "2020-01-01T00:00:00+0000"];
-    struct tm timeinfo;
-    localtime_r(&time, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), DATETIME_FORMAT, &timeinfo);
-
-    return snprintf(buffer, buffer_length, JSON_FORMAT, temperature / 10,
-                    temperature % 10, relative_humidity / 10, relative_humidity % 10,
-                    strftime_buf);
+static inline int format_json(const char *format, char *buffer, size_t buffer_length,
+                              const char *timestamp, int16_t reading) {
+    return snprintf(buffer, buffer_length, format, timestamp, reading / 10,
+                    reading % 10);
 }
 
 /**
@@ -68,21 +57,49 @@ esp_err_t logger_init() {
 /**
  * Log a temperature reading to the MQTT broker.
  */
-esp_err_t logger_log_temperature(int16_t temperature, int16_t relative_humidity) {
-    time_t now;
+esp_err_t logger_log_temperature_and_relative_humidity(int16_t temperature,
+                                                       int16_t relative_humidity) {
+    // Format the current time as an ISO 8601 timestamp
+    time_t    now;
+    char      timestamp[sizeof SAMPLE_DATETIME];
+    struct tm timeinfo;
     time(&now);
-    char buffer[100];
+    strftime(timestamp, sizeof(timestamp), DATETIME_FORMAT, gmtime_r(&now, &timeinfo));
 
-    int bytes_written = temperature_reading_to_json(now, temperature, relative_humidity,
-                                                    buffer, sizeof(buffer));
+    // Create a buffer for each message type
+    char temperature_message[BUFFER_LENGTH(TEMPERATURE_JSON_FORMAT)];
+    char humidity_message[BUFFER_LENGTH(HUMIDITY_JSON_FORMAT)];
 
-    if (bytes_written < 0) {
+    // Serialize the temperature message
+    int temperature_message_length =
+        format_json(TEMPERATURE_JSON_FORMAT, temperature_message,
+                    sizeof(temperature_message), timestamp, temperature);
+    if (temperature_message_length < 0) {
         printf("Failed to serialize temperature reading\n");
         return ESP_FAIL;
     }
 
-    if (esp_mqtt_client_publish(client, MQTT_TOPIC, buffer, bytes_written, 2, 1) < 0) {
-        printf("Failed to publish message\n");
+    // Serialize the relative humidity reading
+    int humidity_message_length =
+        format_json(HUMIDITY_JSON_FORMAT, humidity_message, sizeof(humidity_message),
+                    timestamp, relative_humidity);
+    if (humidity_message_length < 0) {
+        printf("Failed to serialize humidity reading\n");
+        return ESP_FAIL;
+    }
+
+    // Send the temperature reading
+    if (esp_mqtt_client_publish(client, MQTT_TOPIC_PREFIX "/temperature",
+                                temperature_message, temperature_message_length, 2,
+                                1) < 0) {
+        printf("Failed to publish temperature message\n");
+        return ESP_FAIL;
+    }
+
+    // Send the relative humidity reading
+    if (esp_mqtt_client_publish(client, MQTT_TOPIC_PREFIX "/relative-humidity",
+                                humidity_message, humidity_message_length, 2, 1) < 0) {
+        printf("Failed to publish relative humidity message\n");
         return ESP_FAIL;
     }
 

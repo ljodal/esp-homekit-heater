@@ -246,7 +246,8 @@ void temperature_sensor_task(void *_args) {
             homekit_characteristic_notify(&current_humidity, current_humidity.value);
 
             // Log the read temperature
-            logger_log_temperature(temperature_value, humidity_value);
+            logger_log_temperature_and_relative_humidity(temperature_value,
+                                                         humidity_value);
         }
 
         // Update state, in case we should to turn the heater on or off. We
